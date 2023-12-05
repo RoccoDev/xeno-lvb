@@ -23,10 +23,22 @@
 import struct
 import json
 import sys
+import re
+from ext import get_ext_mapper
 
 JSON_INCL_BYTES = False
 SPECIAL_MAGIC = [b"INFO", b"XFRM", b"DEBI", b"STRG"]
-EXTENDED_REGISTRY = {}
+
+def ext_import(xc3):
+    if xc3:
+        # XC3-only modules
+        import lvb_xc3_enemy
+        pass
+    else:
+        # XC2-only modules
+        pass
+    # Common modules
+    pass
 
 def u16(data): return struct.unpack('<H', data[0:2])[0]
 
@@ -43,11 +55,13 @@ def mapper_registry(magic, xc3):
         b"DEBI": Debug,
         b"STRG": Strings
     }
+    test = {}
+    ext_import(xc3)
+
     if magic in registry:
         return registry[magic]
-    if magic in EXTENDED_REGISTRY:
-        return EXTENDED_REGISTRY[magic]
-    return Default
+    ext = get_ext_mapper(magic, xc3)
+    return ext if ext else Default
 
 class Section():
     def __init__(self, data, xc3, start):
@@ -226,22 +240,30 @@ class Lvb():
 
 
         self._gimmick_map = gimmick_map
+        self._gimmick_bdat_map = gimmick_bdat_map
         self._sections = list(filter(lambda s: s.magic() not in SPECIAL_MAGIC, sections))
 
     def section(self, magic):
-        next(filter(lambda s: s.magic() == magic.encode('utf-8'), self._sections), None)
+        return next(filter(lambda s: s.magic() == magic.encode('utf-8'), self._sections), None)
 
     def gimmick(self, gimmick_id):
-        self._gimmick_map.get(gimmick_id)
+        return self._gimmick_map.get(gimmick_id)
 
     def bdat_gimmick(self, bdat_id):
-        self._gimmick_bdat_map.get(bdat_id)
+        return self._gimmick_bdat_map.get(bdat_id)
 
     def to_json(self):
         return {
             'version': self._version,
             'sections': self._sections
         }
+
+hash_matcher = re.compile(r'^<([0-9A-F]{8})>$')
+def name_or_bdat_hash(s):
+    m = hash_matcher.match(s)
+    if not m:
+        return s
+    return int(m.group(1), base=16)
 
 if __name__ == "__main__":
     from json import JSONEncoder
@@ -251,11 +273,36 @@ if __name__ == "__main__":
     JSONEncoder.default = _default
     JSON_INCL_BYTES = True
 
-    file = sys.argv[1]
+    # Support both XC3 and XC2 for now
+    ext_import(True)
+    ext_import(False)
+
+    def full(lvb, argv):
+        json.dump(lvb, sys.stdout, ensure_ascii=False, indent=1)
+
+    def gimmick(lvb, argv):
+        gimmick = lvb.gimmick(name_or_bdat_hash(argv[2]))
+        if gimmick is None:
+            raise Exception("gimmick not found")
+        json.dump(gimmick, sys.stdout, ensure_ascii=False, indent=1)
+
+    def bdat(lvb, argv):
+        gimmick = lvb.bdat_gimmick(name_or_bdat_hash(argv[2]))
+        if gimmick is None:
+            raise Exception("gimmick not found")
+        json.dump(gimmick, sys.stdout, ensure_ascii=False, indent=1)
+
+    command = sys.argv[1]
+    file_arg, runner = {
+        "full": (2, full),
+        "gimmick": (3, gimmick),
+        "bdat": (3, bdat)
+    }[command.lower()]
+
+    file = sys.argv[file_arg]
     file = open(file, "rb")
     data = list(file.read())
     file.close()
 
     lvb = Lvb(data)
-    json.dump(lvb, sys.stdout, ensure_ascii=False, indent=1)
-
+    runner(lvb, sys.argv)
